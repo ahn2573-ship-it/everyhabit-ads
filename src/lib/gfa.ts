@@ -2,6 +2,11 @@ import * as XLSX from "xlsx";
 
 // ---------------------------------------------------------------------------
 // 네이버 GFA RAW 리포트 파서 (형식 자동 인식 · 파일명 무관)
+//   두 종류의 파일을 열 이름으로 구분한다.
+//   1) 일반 소재 리포트  : 캠페인 · 광고 그룹 · 광고 소재 열이 있음  → kind "creative"
+//   2) ADVoost 상품 리포트: 캠페인 · 상품명 · 쇼핑몰 상품 ID 열이 있음 → kind "advoost"
+//      ADVoost 는 광고 그룹/소재가 없으므로, 캠페인 아래에 "ADVoost 상품" 세트 하나를 두고
+//      상품을 소재 자리에 넣는다. (대시보드에서 캠페인 → 세트 → 소재·상품 으로 똑같이 보임)
 //   · 열 이름만 보고 필요한 값을 찾는다. 열 순서가 바뀌거나 안 쓰는 열이 많아도 된다.
 //   · 시간별 / 기기별 / 연령·성별별 등 어떤 분해 리포트든
 //     "날짜 + 캠페인 + 세트(광고그룹) + 소재" 단위로 합산하므로 합계는 같다.
@@ -28,10 +33,23 @@ export interface GfaParsedRow {
   cart_revenue: number;
 }
 
-export type GfaLevel = "소재" | "세트" | "캠페인" | "알수없음";
+export type GfaLevel = "소재" | "상품" | "세트" | "캠페인" | "알수없음";
+
+/** 파일 종류. 같은 종류끼리만 날짜 단위로 교체된다 (두 파일을 따로 올려도 서로 안 지움). */
+export type GfaKind = "creative" | "advoost";
+
+export const GFA_SOURCE: Record<GfaKind, string> = {
+  creative: "gfa_import",
+  advoost: "gfa_advoost",
+};
+
+/** ADVoost 캠페인의 상품들을 묶는 가상 세트 */
+export const advoostAdgroupId = (campaignId: string) => `advoost-${campaignId}`;
+export const ADVOOST_ADGROUP_NAME = "ADVoost 상품";
 
 export interface GfaParseResult {
   rows: GfaParsedRow[];
+  kind: GfaKind;
   rawCount: number;
   skipped: number;
   level: GfaLevel;
@@ -44,11 +62,13 @@ const NAME = {
   creative: ["광고 소재 이름", "소재 이름", "소재명", "광고소재 이름", "광고 소재명"],
   adgroup: ["광고 그룹 이름", "광고그룹 이름", "그룹 이름", "그룹명", "광고 그룹명", "광고그룹명"],
   campaign: ["캠페인 이름", "캠페인명"],
+  product: ["상품명", "상품 이름"],
 };
 const ID = {
   creative: ["광고 소재 ID", "소재 ID", "소재ID", "광고소재 ID"],
   adgroup: ["광고 그룹 ID", "광고그룹 ID", "그룹 ID", "그룹ID", "광고그룹ID"],
   campaign: ["캠페인 ID", "캠페인ID"],
+  product: ["쇼핑몰 상품 ID", "쇼핑몰 상품ID", "네이버쇼핑 상품 ID", "네이버쇼핑 상품ID", "상품 ID"],
 };
 const METRIC = {
   date: ["기간", "날짜", "일자"],
@@ -109,13 +129,14 @@ export function parseDateCell(v: unknown): { date: string | null; period: boolea
 /** 이미 읽은 표(행 객체 배열)를 합산한다. 파일 읽기와 분리해 테스트하기 쉽게 둔다. */
 export function aggregateGfaRows(json: Record<string, unknown>[]): GfaParseResult {
   if (!json.length) {
-    return { rows: [], rawCount: 0, skipped: 0, level: "알수없음", periodTotal: false, missingColumns: [] };
+    return { rows: [], kind: "creative", rawCount: 0, skipped: 0, level: "알수없음", periodTotal: false, missingColumns: [] };
   }
   const headers = Object.keys(json[0]);
   const col = {
     cId: findColumn(headers, ID.campaign), cName: findColumn(headers, NAME.campaign),
     gId: findColumn(headers, ID.adgroup), gName: findColumn(headers, NAME.adgroup),
     aId: findColumn(headers, ID.creative), aName: findColumn(headers, NAME.creative),
+    pId: findColumn(headers, ID.product), pName: findColumn(headers, NAME.product),
     date: findColumn(headers, METRIC.date),
     cost: findColumn(headers, METRIC.cost), imp: findColumn(headers, METRIC.imp),
     clk: findColumn(headers, METRIC.clk), conv: findColumn(headers, METRIC.conv),
@@ -133,7 +154,10 @@ export function aggregateGfaRows(json: Record<string, unknown>[]): GfaParseResul
 
   const hasCreative = Boolean(col.aId || col.aName);
   const hasGroup = Boolean(col.gId || col.gName);
-  const level: GfaLevel = hasCreative ? "소재" : hasGroup ? "세트" : (col.cId || col.cName) ? "캠페인" : "알수없음";
+  // 광고 그룹/소재 열은 없고 상품 열이 있으면 ADVoost 상품 리포트
+  const kind: GfaKind = !hasCreative && !hasGroup && (col.pId || col.pName) ? "advoost" : "creative";
+  const level: GfaLevel = kind === "advoost" ? "상품"
+    : hasCreative ? "소재" : hasGroup ? "세트" : (col.cId || col.cName) ? "캠페인" : "알수없음";
 
   const get = (r: Record<string, unknown>, c: string | null) => (c ? r[c] : "");
   const map = new Map<string, GfaParsedRow>();
@@ -145,11 +169,21 @@ export function aggregateGfaRows(json: Record<string, unknown>[]): GfaParseResul
     if (period) periodTotal = true;
 
     const cName = toText(get(r, col.cName)) || null;
-    const gName = toText(get(r, col.gName)) || null;
-    const aName = toText(get(r, col.aName)) || null;
     const campaign_id = toText(get(r, col.cId)) || cName || "-";
-    const adgroup_id = toText(get(r, col.gId)) || gName || "-";
-    const creative_id = toText(get(r, col.aId)) || aName || "-";
+    let gName: string | null, aName: string | null, adgroup_id: string, creative_id: string;
+    if (kind === "advoost") {
+      // 상품 = 소재 자리. ID 는 소재 ID 와 섞이지 않게 'p-' 를 붙인다.
+      aName = toText(get(r, col.pName)) || null;
+      const pid = toText(get(r, col.pId));
+      creative_id = pid ? `p-${pid}` : aName ? `p-${aName}` : "-";
+      gName = ADVOOST_ADGROUP_NAME;
+      adgroup_id = advoostAdgroupId(campaign_id);
+    } else {
+      gName = toText(get(r, col.gName)) || null;
+      aName = toText(get(r, col.aName)) || null;
+      adgroup_id = toText(get(r, col.gId)) || gName || "-";
+      creative_id = toText(get(r, col.aId)) || aName || "-";
+    }
 
     // 합계 행("합계", "총합" 등)과 빈 행은 건너뛴다
     const label = `${cName ?? ""}${gName ?? ""}${aName ?? ""}`;
@@ -180,7 +214,7 @@ export function aggregateGfaRows(json: Record<string, unknown>[]): GfaParseResul
     map.set(key, cur);
   }
 
-  return { rows: [...map.values()], rawCount: json.length, skipped, level, periodTotal, missingColumns };
+  return { rows: [...map.values()], kind, rawCount: json.length, skipped, level, periodTotal, missingColumns };
 }
 
 /** GFA RAW 파일(.csv/.xlsx)을 읽어 합산한다. */
@@ -197,10 +231,10 @@ export async function parseGfaFile(file: File): Promise<GfaParseResult> {
  * 같은 날짜·같은 소재가 두 파일에 다 있으면 (예: 시간별 + 기기별 리포트를 둘 다 올림)
  * 더하지 않고 나중 파일 값으로 덮어쓴다 — 같은 성과를 두 번 세지 않기 위해.
  */
-export function mergeFiles(results: GfaParsedRow[][]): GfaParsedRow[] {
-  const map = new Map<string, GfaParsedRow>();
-  for (const rows of results) {
-    for (const r of rows) map.set(`${r.stat_date}|${r.campaign_id}|${r.adgroup_id}|${r.creative_id}`, r);
+export function mergeFiles(results: Array<{ kind: GfaKind; rows: GfaParsedRow[] }>): Array<GfaParsedRow & { kind: GfaKind }> {
+  const map = new Map<string, GfaParsedRow & { kind: GfaKind }>();
+  for (const { kind, rows } of results) {
+    for (const r of rows) map.set(`${r.stat_date}|${r.campaign_id}|${r.adgroup_id}|${r.creative_id}`, { ...r, kind });
   }
   return [...map.values()];
 }
