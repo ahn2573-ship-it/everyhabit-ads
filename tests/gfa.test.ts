@@ -50,10 +50,28 @@ describe("GFA 파서", () => {
   });
 
   it("두 파일에 같은 소재·날짜가 있으면 더하지 않고 나중 값으로 덮는다", () => {
-    const a = aggregateGfaRows([row({})]).rows;
-    const b = aggregateGfaRows([row({ "총비용(원)": 1500 })]).rows;
+    const a = aggregateGfaRows([row({})]);
+    const b = aggregateGfaRows([row({ "총비용(원)": 1500 })]);
     const merged = mergeFiles([a, b]);
     expect(merged).toHaveLength(1);
     expect(merged[0].cost).toBe(1500);
+  });
+
+  it("ADVoost 상품 리포트는 캠페인 → 'ADVoost 상품' 세트 → 상품으로 들어간다", () => {
+    const res = aggregateGfaRows([
+      { "상품명": "영양제 A", "쇼핑몰 상품 ID": "137", "캠페인 이름": "애드부스트_비오프로", "캠페인 ID": "1653189",
+        "기간": "2026.10.25.", "캠페인 목적": "ADVoost 쇼핑", "총비용": "1,000", "노출수": 50, "클릭수": 2,
+        "구매완료 수": 1, "구매완료 전환매출액": 30000, "총 전환수": 1, "총 전환매출액": 30000 },
+    ]);
+    expect(res.kind).toBe("advoost");
+    expect(res.level).toBe("상품");
+    expect(res.rows[0]).toMatchObject({
+      campaign_id: "1653189", adgroup_id: "advoost-1653189", adgroup_name: "ADVoost 상품",
+      creative_id: "p-137", creative_name: "영양제 A", cost: 1000, conv_revenue: 30000,
+    });
+  });
+
+  it("일반 소재 리포트는 kind=creative", () => {
+    expect(aggregateGfaRows([row({})]).kind).toBe("creative");
   });
 });
