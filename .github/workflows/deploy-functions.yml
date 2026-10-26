@@ -1,0 +1,50 @@
+name: Deploy Supabase Edge Functions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/functions/**"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secrets
+        id: check
+        run: |
+          if [ -n "${{ secrets.SUPABASE_ACCESS_TOKEN }}" ] && [ -n "${{ secrets.SUPABASE_PROJECT_REF }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Supabase token missing - skip deploy"
+          fi
+
+      - uses: supabase/setup-cli@v1
+        if: steps.check.outputs.ready == 'true'
+        with:
+          version: latest
+
+      - name: Set Supabase secrets
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          supabase secrets set \
+            AD_API_MODE="${{ secrets.AD_API_MODE || 'mock' }}" \
+            AD_API_BASE_URL="${{ secrets.AD_API_BASE_URL || 'https://api.searchad.naver.com' }}" \
+            AD_API_KEY="${{ secrets.AD_API_KEY }}" \
+            AD_API_SECRET="${{ secrets.AD_API_SECRET }}" \
+            AD_API_CUSTOMER_ID="${{ secrets.AD_API_CUSTOMER_ID }}" \
+            --project-ref "$SUPABASE_PROJECT_REF"
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+
+      - name: Deploy function
+        if: steps.check.outputs.ready == 'true'
+        run: supabase functions deploy sync-ads --project-ref "$SUPABASE_PROJECT_REF"
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
