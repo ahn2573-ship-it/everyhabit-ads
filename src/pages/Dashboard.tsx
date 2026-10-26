@@ -16,8 +16,8 @@ import { DataTable, type Column } from "@/components/DataTable";
 import { CostRevenueChart, DailyTrendChart } from "@/components/charts/Charts";
 import { Badge, Button, ErrorState, Input } from "@/components/ui";
 import {
-  LEVEL_LABEL, MEDIA_LABEL, campaignTypeLabel,
-  type BreakdownRow, type Level, type Media,
+  LEVEL_LABEL, MEDIA_LABEL, MEDIA_SHORT, campaignTypeLabel,
+  type BreakdownRow, type Level, type PeriodSummary, type View,
 } from "@/lib/types";
 
 interface Picked { id: string; name: string }
@@ -31,10 +31,10 @@ function rowName(r: BreakdownRow, level: Level): string {
 }
 
 function rowKey(r: BreakdownRow): string {
-  return `${r.campaign_id}|${r.adgroup_id ?? ""}|${r.creative_id ?? ""}`;
+  return `${r.media}|${r.campaign_id}|${r.adgroup_id ?? ""}|${r.creative_id ?? ""}`;
 }
 
-function buildColumns(level: Level, media: Media, showParents: boolean): Column<BreakdownRow>[] {
+function buildColumns(level: Level, media: View, showParents: boolean): Column<BreakdownRow>[] {
   const nameCol: Column<BreakdownRow> = {
     key: "name",
     header: LEVEL_LABEL[level],
@@ -66,7 +66,14 @@ function buildColumns(level: Level, media: Media, showParents: boolean): Column<
 
   const cols: Column<BreakdownRow>[] = [nameCol];
 
-  if (media === "sa") {
+  if (media === "total") {
+    cols.push({
+      key: "media", header: "매체",
+      value: (r) => MEDIA_SHORT[r.media],
+      render: (r) => <Badge tone={r.media === "sa" ? "brand" : "good"}>{MEDIA_SHORT[r.media]}</Badge>,
+    });
+  }
+  if (media !== "gfa") {
     cols.push({
       key: "type", header: "유형",
       value: (r) => campaignTypeLabel(r.campaign_type),
@@ -105,7 +112,7 @@ function buildColumns(level: Level, media: Media, showParents: boolean): Column<
       value: (r) => (r.avg_rank === null ? null : Number(r.avg_rank)),
       render: (r) => (r.avg_rank ? decimal(r.avg_rank, 1) : "—"),
     });
-  } else {
+  } else if (media === "gfa") {
     cols.push(
       n("cart_count", "장바구니 수", num, true),
       n("cart_revenue", "장바구니 매출", won, true),
@@ -115,8 +122,79 @@ function buildColumns(level: Level, media: Media, showParents: boolean): Column<
   return cols;
 }
 
+/** 전체 탭 상단: SA / GFA / 합계 비교표. 행을 누르면 그 매체 탭으로 이동 */
+function MediaSplit({
+  sa, gfa, total, loading, onPick,
+}: {
+  sa?: PeriodSummary; gfa?: PeriodSummary; total?: PeriodSummary;
+  loading: boolean; onPick: (m: View) => void;
+}) {
+  const rows: Array<{ key: View; label: string; d?: PeriodSummary }> = [
+    { key: "sa", label: "네이버 SA", d: sa },
+    { key: "gfa", label: "네이버 GFA", d: gfa },
+    { key: "total", label: "합계", d: total },
+  ];
+  const totalCost = Number(total?.cost ?? 0);
+  return (
+    <div className="card mt-4 overflow-hidden">
+      <div className="border-b border-line px-4 py-3">
+        <h2 className="text-sm font-semibold">매체별 요약</h2>
+        <p className="mt-0.5 text-xs text-ink-faint">행을 누르면 해당 매체 탭으로 이동합니다</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr>
+              <th className="th">매체</th>
+              <th className="th text-right">광고비</th>
+              <th className="th text-right">광고비 비중</th>
+              <th className="th text-right">노출수</th>
+              <th className="th text-right">클릭수</th>
+              <th className="th text-right">CTR</th>
+              <th className="th text-right">CPC</th>
+              <th className="th text-right">구매완료 수</th>
+              <th className="th text-right">구매완료 매출</th>
+              <th className="th text-right">구매완료 ROAS</th>
+              <th className="th text-right">총 전환 ROAS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ key, label, d }) => (
+              <tr
+                key={key}
+                className={cn(key === "total" ? "bg-surface-sunken font-semibold" : "row-hover cursor-pointer")}
+                onClick={key === "total" ? undefined : () => onPick(key)}
+              >
+                <td className="td">
+                  {key === "total" ? label : <Badge tone={key === "sa" ? "brand" : "good"}>{label}</Badge>}
+                </td>
+                {loading || !d ? (
+                  <td className="td text-right text-ink-faint" colSpan={10}>불러오는 중…</td>
+                ) : (
+                  <>
+                    <td className="td text-right">{won(d.cost)}</td>
+                    <td className="td text-right">{totalCost ? pct(Number(d.cost) / totalCost, 1) : "—"}</td>
+                    <td className="td text-right">{num(d.impressions)}</td>
+                    <td className="td text-right">{num(d.clicks)}</td>
+                    <td className="td text-right">{pct(d.ctr)}</td>
+                    <td className="td text-right">{won(d.cpc)}</td>
+                    <td className="td text-right">{num(d.conv_count)}</td>
+                    <td className="td text-right">{won(d.conv_revenue)}</td>
+                    <td className="td text-right">{roasPct(d.conv_roas)}</td>
+                    <td className="td text-right">{roasPct(d.total_roas)}</td>
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export function Dashboard() {
-  const { accountId, range, compare, media } = useAppState();
+  const { accountId, range, compare, media, setMedia } = useAppState();
   const { isAdmin } = useAuth();
   const navigate = useNavigate();
 
@@ -150,6 +228,17 @@ export function Dashboard() {
     enabled: enabled && Boolean(prevRange),
   });
   const daily = useQuery({ queryKey: ["daily", scope], queryFn: () => api.daily(scope), enabled });
+  // 전체 탭: SA / GFA 매체별 요약
+  const saSummary = useQuery({
+    queryKey: ["summary", { ...scope, media: "sa" }],
+    queryFn: () => api.summary({ ...scope, media: "sa" }),
+    enabled: enabled && media === "total",
+  });
+  const gfaSummary = useQuery({
+    queryKey: ["summary", { ...scope, media: "gfa" }],
+    queryFn: () => api.summary({ ...scope, media: "gfa" }),
+    enabled: enabled && media === "total",
+  });
   const breakdown = useQuery({
     queryKey: ["breakdown", scope, level],
     queryFn: () => api.breakdown({ ...scope, level }),
@@ -203,6 +292,7 @@ export function Dashboard() {
           (res.nameError ? ` (이름 일부 갱신 실패: ${res.nameError})` : "")
         : `수집 실패 — ${res.error ?? "원인 미상"}`);
       await Promise.all([summary.refetch(), daily.refetch(), breakdown.refetch()]);
+      if (media === "total") await saSummary.refetch();
     } catch (e) {
       setSyncMessage(e instanceof Error ? e.message : "수집 요청에 실패했습니다.");
     } finally {
@@ -235,13 +325,15 @@ export function Dashboard() {
         title={`대시보드 · ${MEDIA_LABEL[media]}`}
         description={media === "sa"
           ? "네이버 검색광고 API 로 매일 오전 7시에 자동 수집된 데이터입니다"
-          : "업로드한 네이버 GFA RAW 파일 기준 데이터입니다"}
+          : media === "gfa"
+            ? "업로드한 네이버 GFA RAW 파일 기준 데이터입니다"
+            : "네이버 SA 와 GFA 를 합산한 데이터입니다"}
         actions={
           <>
             <Button size="md" onClick={handleExport} disabled={!summary.data} loading={exporting}>
               <Download className="h-3.5 w-3.5" /> 엑셀 다운로드
             </Button>
-            {isAdmin && media === "sa" && (
+            {isAdmin && media !== "gfa" && (
               <Button size="md" variant="primary" onClick={handleSync} loading={syncing}>
                 <RefreshCw className="h-3.5 w-3.5" /> 전일 데이터 수집
               </Button>
@@ -304,6 +396,16 @@ export function Dashboard() {
         media={media}
       />
 
+      {media === "total" && (
+        <MediaSplit
+          sa={saSummary.data}
+          gfa={gfaSummary.data}
+          total={summary.data}
+          loading={saSummary.isLoading || gfaSummary.isLoading}
+          onPick={setMedia}
+        />
+      )}
+
       {/* 캠페인 / 세트 / 소재 표 */}
       <div className="mt-4">
         <DataTable
@@ -317,7 +419,9 @@ export function Dashboard() {
           emptyTitle="이 기간에는 데이터가 없습니다"
           emptyDescription={media === "gfa"
             ? "GFA 업로드 화면에서 해당 날짜의 RAW 파일을 올려 주세요."
-            : "기간을 바꾸거나, 수집 이력에서 해당 날짜를 수집해 주세요."}
+            : media === "sa"
+              ? "기간을 바꾸거나, 수집 이력에서 해당 날짜를 수집해 주세요."
+              : "기간을 바꾸거나, SA 수집 · GFA 업로드를 확인해 주세요."}
           toolbar={
             <>
               <div className="flex items-center rounded-md border border-line bg-surface-sunken p-0.5" role="tablist">

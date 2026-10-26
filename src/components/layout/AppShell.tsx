@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import { useAuth } from "@/hooks/useAuth";
 import { useAppState } from "@/hooks/useAppState";
 import { Badge, Select } from "@/components/ui";
-import type { Media } from "@/lib/types";
+import type { View } from "@/lib/types";
 import { BRAND_NAME } from "@/lib/brand";
 
 interface NavItem {
@@ -35,7 +35,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
   },
 ];
 
-const MEDIA_TABS: { value: Media; label: string }[] = [
+const MEDIA_TABS: { value: View; label: string }[] = [
+  { value: "total", label: "전체" },
   { value: "sa", label: "네이버 SA" },
   { value: "gfa", label: "네이버 GFA" },
 ];
@@ -137,7 +138,7 @@ export function AppShell() {
             </Select>
           )}
 
-          {/* 매체 탭 (SA / GFA) — 전역 상태, 대시보드·RAW 화면에 적용 */}
+          {/* 매체 탭 (전체 / SA / GFA) — 전역 상태, 대시보드·RAW 화면에 적용 */}
           <div className="flex items-center rounded-md border border-line bg-surface-sunken p-0.5" role="tablist" aria-label="광고 매체">
             {MEDIA_TABS.map((t) => (
               <button

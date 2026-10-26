@@ -3,7 +3,7 @@ import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { delta } from "@/lib/metrics";
 import { decimal, num, pct, roasPct, signedPct, won } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import type { DailyPoint, Media, PeriodSummary } from "@/lib/types";
+import type { DailyPoint, Media, PeriodSummary, View } from "@/lib/types";
 import { Skeleton } from "@/components/ui";
 
 type Fmt = "int" | "won" | "pct" | "roas" | "rank";
@@ -57,7 +57,7 @@ export function KpiStrip({
   series?: DailyPoint[];
   compareLabel: string;
   loading?: boolean;
-  media: Media;
+  media: View;
 }) {
   const kpis = KPIS.filter((k) => !k.only || k.only === media);
 

@@ -1,8 +1,8 @@
 import * as XLSX from "xlsx";
 import { BRAND_NAME } from "./brand";
 import {
-  MEDIA_LABEL, campaignTypeLabel,
-  type BreakdownRow, type DailyPoint, type Media, type PeriodSummary, type RawRow,
+  MEDIA_LABEL, MEDIA_SHORT, campaignTypeLabel,
+  type BreakdownRow, type DailyPoint, type PeriodSummary, type RawRow, type View,
 } from "./types";
 
 function sheet(rows: Record<string, unknown>[]) {
@@ -21,7 +21,7 @@ function metricCols(r: {
   conv_count: number; conv_revenue: number; conv_roas: number;
   total_conv_count: number; total_conv_revenue: number; total_roas: number;
   cart_count: number; cart_revenue: number; cart_roas: number;
-}, media: Media, avgRank?: number | null) {
+}, media: View, avgRank?: number | null) {
   const base: Record<string, unknown> = {
     "노출수": r1(r.impressions),
     "클릭수": r1(r.clicks),
@@ -37,7 +37,7 @@ function metricCols(r: {
   };
   if (media === "sa") {
     base["평균 노출순위"] = avgRank ? Number(Number(avgRank).toFixed(2)) : "";
-  } else {
+  } else if (media === "gfa") {
     base["장바구니 수"] = r1(r.cart_count);
     base["장바구니 매출"] = r1(r.cart_revenue);
     base["장바구니 ROAS"] = ratio(r.cart_roas);
@@ -47,12 +47,15 @@ function metricCols(r: {
 
 /** 대시보드 엑셀: 요약 · 일별 · 캠페인별 · 세트별 · 소재별 */
 export function exportReport(p: {
-  media: Media; from: string; to: string; scopeLabel?: string;
+  media: View; from: string; to: string; scopeLabel?: string;
   summary: PeriodSummary; daily: DailyPoint[];
   campaigns: BreakdownRow[]; adgroups: BreakdownRow[]; creatives: BreakdownRow[];
 }) {
   const wb = XLSX.utils.book_new();
-  const typeCol = (r: BreakdownRow) => (p.media === "sa" ? { "유형": campaignTypeLabel(r.campaign_type) } : {});
+  const typeCol = (r: BreakdownRow) => ({
+    ...(p.media === "total" ? { "매체": MEDIA_SHORT[r.media] } : {}),
+    ...(p.media !== "gfa" ? { "유형": campaignTypeLabel(r.campaign_type) } : {}),
+  });
 
   const summaryRows = [
     { 항목: "매체", 값: MEDIA_LABEL[p.media] },
@@ -67,32 +70,33 @@ export function exportReport(p: {
   }))), "일별 추이");
 
   XLSX.utils.book_append_sheet(wb, sheet(p.campaigns.map((r) => ({
-    "캠페인": r.campaign_name, "캠페인 ID": r.campaign_id, ...typeCol(r),
+    ...typeCol(r), "캠페인": r.campaign_name, "캠페인 ID": r.campaign_id,
     "세트 수": r1(r.child_count), ...metricCols(r, p.media, r.avg_rank),
   }))), "캠페인별");
 
   XLSX.utils.book_append_sheet(wb, sheet(p.adgroups.map((r) => ({
-    "캠페인": r.campaign_name, ...typeCol(r), "세트": r.adgroup_name, "세트 ID": r.adgroup_id,
+    ...typeCol(r), "캠페인": r.campaign_name, "세트": r.adgroup_name, "세트 ID": r.adgroup_id,
     "소재 수": r1(r.child_count), ...metricCols(r, p.media, r.avg_rank),
   }))), "세트별");
 
   XLSX.utils.book_append_sheet(wb, sheet(p.creatives.map((r) => ({
-    "캠페인": r.campaign_name, ...typeCol(r), "세트": r.adgroup_name,
-    "소재": r.creative_name, "소재 ID": r.creative_id,
-    ...(p.media === "sa" ? { "상품명": r.product_name ?? "" } : {}),
+    ...typeCol(r), "캠페인": r.campaign_name, "세트": r.adgroup_name,
+    "소재·상품": r.creative_name, "소재 ID": r.creative_id,
+    "상품명": r.product_name ?? "",
     ...metricCols(r, p.media, r.avg_rank),
-  }))), "소재별");
+  }))), "소재·상품별");
 
   download(wb, `${BRAND_NAME}_${MEDIA_LABEL[p.media]}_${p.from}_${p.to}.xlsx`);
 }
 
 /** RAW 데이터 엑셀 */
-export function exportRaw(media: Media, from: string, to: string, rows: RawRow[]) {
+export function exportRaw(media: View, from: string, to: string, rows: RawRow[]) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, sheet(rows.map((r) => ({
     "날짜": r.stat_date,
+    ...(media === "total" ? { "매체": MEDIA_SHORT[r.media] } : {}),
     "캠페인": r.campaign_name ?? "", "캠페인 ID": r.campaign_id,
-    ...(media === "sa" ? { "유형": campaignTypeLabel(r.campaign_type) } : {}),
+    ...(media !== "gfa" ? { "유형": campaignTypeLabel(r.campaign_type) } : {}),
     "세트": r.adgroup_name ?? "", "세트 ID": r.adgroup_id,
     "소재": r.creative_name ?? "", "소재 ID": r.creative_id,
     ...metricCols({

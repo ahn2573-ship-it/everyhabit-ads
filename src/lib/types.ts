@@ -3,6 +3,9 @@ export type UserRole = "admin" | "viewer";
 /** 광고 매체: sa = 네이버 검색광고(API 자동 수집), gfa = 네이버 GFA(RAW 업로드) */
 export type Media = "sa" | "gfa";
 
+/** 화면에서 보는 단위: total = SA + GFA 합산 */
+export type View = Media | "total";
+
 /** 분석 단위: 캠페인 → 세트(광고그룹) → 소재 */
 export type Level = "campaign" | "adgroup" | "creative";
 
@@ -49,6 +52,7 @@ export interface DailyPoint extends MetricBundle {
 }
 
 export interface BreakdownRow extends MetricBundle {
+  media: Media;
   campaign_id: string;
   campaign_name: string;
   campaign_type: string | null;
@@ -111,7 +115,13 @@ export const CAMPAIGN_TYPE_LABEL: Record<string, string> = {
 export const campaignTypeLabel = (code: string | null | undefined) =>
   code ? CAMPAIGN_TYPE_LABEL[code] ?? `유형 ${code}` : "";
 
-export const MEDIA_LABEL: Record<Media, string> = { sa: "네이버 SA", gfa: "네이버 GFA" };
+export const MEDIA_LABEL: Record<View, string> = {
+  total: "전체 (SA+GFA)",
+  sa: "네이버 SA",
+  gfa: "네이버 GFA",
+};
+
+export const MEDIA_SHORT: Record<Media, string> = { sa: "SA", gfa: "GFA" };
 
 export const LEVEL_LABEL: Record<Level, string> = {
   campaign: "캠페인",

@@ -182,6 +182,8 @@ as $$
   select case when d is null or d = 0 then 0 else n / d end;
 $$;
 
+-- p_media: 'sa' | 'gfa' | 'total'(= SA + GFA 합산)
+
 -- 기간 KPI 합계 -----------------------------------------------------------------
 drop function if exists public.fn_summary(uuid, text, date, date, text, text);
 create or replace function public.fn_summary(
@@ -220,7 +222,7 @@ as $$
       ) as avg_rank
     from public.ad_performance_daily f
     where f.ad_account_id = p_account
-      and f.media = p_media
+      and (p_media = 'total' or f.media = p_media)
       and f.stat_date between p_from and p_to
       and (p_campaign is null or f.campaign_id = p_campaign)
       and (p_adgroup  is null or f.adgroup_id  = p_adgroup)
@@ -276,7 +278,7 @@ as $$
       sum(f.cart_revenue)::numeric      as cart_revenue
     from public.ad_performance_daily f
     where f.ad_account_id = p_account
-      and f.media = p_media
+      and (p_media = 'total' or f.media = p_media)
       and f.stat_date between p_from and p_to
       and (p_campaign is null or f.campaign_id = p_campaign)
       and (p_adgroup  is null or f.adgroup_id  = p_adgroup)
@@ -312,6 +314,7 @@ create or replace function public.fn_breakdown(
   p_adgroup   text default null
 )
 returns table (
+  media text,
   campaign_id text, campaign_name text, campaign_type text,
   adgroup_id text, adgroup_name text,
   creative_id text, creative_name text, product_name text,
@@ -328,6 +331,7 @@ stable
 as $$
   with g as (
     select
+      f.media                                                                as k_media,
       f.campaign_id                                                          as k_campaign,
       case when p_level in ('adgroup', 'creative') then f.adgroup_id end     as k_adgroup,
       case when p_level = 'creative' then f.creative_id end                  as k_creative,
@@ -351,13 +355,14 @@ as $$
       ) as avg_rank
     from public.ad_performance_daily f
     where f.ad_account_id = p_account
-      and f.media = p_media
+      and (p_media = 'total' or f.media = p_media)
       and f.stat_date between p_from and p_to
       and (p_campaign is null or f.campaign_id = p_campaign)
       and (p_adgroup  is null or f.adgroup_id  = p_adgroup)
-    group by 1, 2, 3
+    group by 1, 2, 3, 4
   )
   select
+    g.k_media,
     g.k_campaign,
     coalesce(c.name, nullif(g.k_campaign, '-'), '(캠페인 정보 없음)'),
     coalesce(g.campaign_type, c.campaign_type),
@@ -380,11 +385,11 @@ as $$
     nullif(g.avg_rank, 0)
   from g
   left join public.campaigns c
-    on c.ad_account_id = p_account and c.media = p_media and c.campaign_id = g.k_campaign
+    on c.ad_account_id = p_account and c.media = g.k_media and c.campaign_id = g.k_campaign
   left join public.adgroups a
-    on a.ad_account_id = p_account and a.media = p_media and a.adgroup_id = g.k_adgroup
+    on a.ad_account_id = p_account and a.media = g.k_media and a.adgroup_id = g.k_adgroup
   left join public.creatives cr
-    on cr.ad_account_id = p_account and cr.media = p_media and cr.creative_id = g.k_creative
+    on cr.ad_account_id = p_account and cr.media = g.k_media and cr.creative_id = g.k_creative
   order by g.cost desc, g.impressions desc;
 $$;
 

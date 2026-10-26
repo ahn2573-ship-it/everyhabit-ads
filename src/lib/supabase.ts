@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import type {
-  AdAccount, BreakdownRow, DailyPoint, Level, Media, PeriodSummary, Profile, RawRow, SyncLog,
+  AdAccount, BreakdownRow, DailyPoint, Level, Media, PeriodSummary, Profile, RawRow, SyncLog, View,
 } from "./types";
 
 const url = import.meta.env.VITE_SUPABASE_URL;
@@ -24,7 +24,7 @@ function unwrap<T>(res: { data: T | null; error: { message: string } | null }): 
 
 export interface Scope {
   account: string;
-  media: Media;
+  media: View;
   from: string;
   to: string;
   campaignId?: string | null;
@@ -86,7 +86,7 @@ export const api = {
   // RAW
   // -------------------------------------------------------------------------
   async rawRows(params: {
-    account: string; media: Media; from: string; to: string; search?: string;
+    account: string; media: View; from: string; to: string; search?: string;
     page?: number; pageSize?: number;
   }): Promise<{ rows: RawRow[]; total: number }> {
     const page = params.page ?? 0;
@@ -94,10 +94,10 @@ export const api = {
     let q = supabase.from("v_performance")
       .select("*", { count: "exact" })
       .eq("ad_account_id", params.account)
-      .eq("media", params.media)
       .gte("stat_date", params.from).lte("stat_date", params.to)
       .order("stat_date", { ascending: false }).order("cost", { ascending: false })
       .range(page * size, page * size + size - 1);
+    if (params.media !== "total") q = q.eq("media", params.media);
     if (params.search) {
       const s = params.search.replace(/[,()]/g, " ");
       q = q.or([
@@ -111,7 +111,7 @@ export const api = {
   },
 
   /** RAW 전체(엑셀용) — 1000행씩 나눠 받는다 */
-  async rawAll(params: { account: string; media: Media; from: string; to: string }): Promise<RawRow[]> {
+  async rawAll(params: { account: string; media: View; from: string; to: string }): Promise<RawRow[]> {
     const out: RawRow[] = [];
     for (let page = 0; page < 100; page++) {
       const { rows } = await api.rawRows({ ...params, page, pageSize: 1000 });

@@ -8,7 +8,7 @@ import { decimal, num, won } from "@/lib/format";
 import { PageHeader } from "@/components/layout/AppShell";
 import { PeriodFilter } from "@/components/layout/PeriodFilter";
 import { Badge, Button, Card, EmptyState, ErrorState, Input, Pagination, TableSkeleton } from "@/components/ui";
-import { MEDIA_LABEL, campaignTypeLabel } from "@/lib/types";
+import { MEDIA_LABEL, MEDIA_SHORT, campaignTypeLabel } from "@/lib/types";
 
 const PAGE_SIZE = 100;
 
@@ -82,6 +82,7 @@ export function RawData() {
                 <thead>
                   <tr>
                     <th className="th">날짜</th>
+                    {media === "total" && <th className="th">매체</th>}
                     <th className="th">캠페인</th>
                     <th className="th">세트</th>
                     <th className="th">소재</th>
@@ -91,18 +92,22 @@ export function RawData() {
                     <th className="th text-right">구매완료 수</th>
                     <th className="th text-right">구매완료 매출</th>
                     <th className="th text-right">총 전환수</th>
-                    {media === "sa"
-                      ? <th className="th text-right">평균 순위</th>
-                      : <th className="th text-right">장바구니 수</th>}
+                    {media === "sa" && <th className="th text-right">평균 순위</th>}
+                    {media === "gfa" && <th className="th text-right">장바구니 수</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r) => (
                     <tr key={r.id} className="row-hover">
                       <td className="td tnum whitespace-nowrap">{r.stat_date}</td>
+                      {media === "total" && (
+                        <td className="td">
+                          <Badge tone={r.media === "sa" ? "brand" : "good"}>{MEDIA_SHORT[r.media]}</Badge>
+                        </td>
+                      )}
                       <td className="td max-w-[220px]">
                         <p className="truncate" title={r.campaign_name ?? r.campaign_id}>{r.campaign_name ?? r.campaign_id}</p>
-                        {media === "sa" && r.campaign_type && <Badge>{campaignTypeLabel(r.campaign_type)}</Badge>}
+                        {r.media === "sa" && r.campaign_type && <Badge>{campaignTypeLabel(r.campaign_type)}</Badge>}
                       </td>
                       <td className="td max-w-[200px] truncate" title={r.adgroup_name ?? r.adgroup_id}>
                         {r.adgroup_name ?? r.adgroup_id}
@@ -119,9 +124,8 @@ export function RawData() {
                       <td className="td text-right">{num(r.conv_count)}</td>
                       <td className="td text-right">{won(r.conv_revenue)}</td>
                       <td className="td text-right">{num(r.total_conv_count)}</td>
-                      {media === "sa"
-                        ? <td className="td text-right">{r.avg_rank ? decimal(r.avg_rank, 1) : "—"}</td>
-                        : <td className="td text-right">{num(r.cart_count)}</td>}
+                      {media === "sa" && <td className="td text-right">{r.avg_rank ? decimal(r.avg_rank, 1) : "—"}</td>}
+                      {media === "gfa" && <td className="td text-right">{num(r.cart_count)}</td>}
                     </tr>
                   ))}
                 </tbody>
