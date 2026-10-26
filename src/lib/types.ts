@@ -116,5 +116,5 @@ export const MEDIA_LABEL: Record<Media, string> = { sa: "네이버 SA", gfa: "�
 export const LEVEL_LABEL: Record<Level, string> = {
   campaign: "캠페인",
   adgroup: "세트",
-  creative: "소재",
+  creative: "소재·상품",
 };
