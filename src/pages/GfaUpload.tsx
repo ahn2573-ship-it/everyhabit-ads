@@ -3,7 +3,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2, Upload } from "lucide-react";
 import { useAppState } from "@/hooks/useAppState";
 import { api, supabase } from "@/lib/supabase";
-import { mergeFiles, parseGfaFile, type GfaLevel, type GfaParsedRow } from "@/lib/gfa";
+import {
+  GFA_SOURCE, mergeFiles, parseGfaFile, type GfaKind, type GfaLevel, type GfaParsedRow,
+} from "@/lib/gfa";
 import { addDays, seoulToday } from "@/lib/dateRange";
 import { num, won } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -12,9 +14,13 @@ import {
   Button, Card, CardHeader, EmptyState, ErrorState, Input, Modal, TableSkeleton,
 } from "@/components/ui";
 
+type Row = GfaParsedRow & { kind: GfaKind };
+
+const KIND_LABEL: Record<GfaKind, string> = { creative: "일반 소재 리포트", advoost: "ADVoost 상품 리포트" };
+
 interface Preview {
-  files: Array<{ name: string; level: GfaLevel; rows: number; skipped: number }>;
-  rows: GfaParsedRow[];
+  files: Array<{ name: string; kind: GfaKind; level: GfaLevel; rows: number; skipped: number; cost: number }>;
+  rows: Row[];
   dates: string[];
   cost: number;
   impressions: number;
@@ -64,7 +70,7 @@ export function GfaUpload() {
     setMessage(null);
     setPreview(null);
     try {
-      const results: GfaParsedRow[][] = [];
+      const results: Array<{ kind: GfaKind; rows: GfaParsedRow[] }> = [];
       const info: Preview["files"] = [];
       const problems: string[] = [];
       for (const f of files) {
@@ -81,8 +87,11 @@ export function GfaUpload() {
           problems.push(`${f.name}: 읽을 수 있는 행이 없습니다.`);
           continue;
         }
-        results.push(res.rows);
-        info.push({ name: f.name, level: res.level, rows: res.rows.length, skipped: res.skipped });
+        results.push({ kind: res.kind, rows: res.rows });
+        info.push({
+          name: f.name, kind: res.kind, level: res.level, rows: res.rows.length, skipped: res.skipped,
+          cost: res.rows.reduce((a, r) => a + r.cost, 0),
+        });
       }
       if (problems.length && !results.length) {
         setMessage({ tone: "bad", text: problems.join("\n") });
@@ -134,9 +143,13 @@ export function GfaUpload() {
           });
         }
         if (r.creative_id !== "-") {
+          const isProduct = r.kind === "advoost";
           cre.set(r.creative_id, {
             ad_account_id: accountId, media: "gfa", creative_id: r.creative_id,
-            adgroup_id: r.adgroup_id, campaign_id: r.campaign_id, name: r.creative_name, updated_at: now,
+            adgroup_id: r.adgroup_id, campaign_id: r.campaign_id, name: r.creative_name,
+            product_name: isProduct ? r.creative_name : null,
+            mall_product_id: isProduct ? r.creative_id.replace(/^p-/, "") : null,
+            updated_at: now,
           });
         }
       }
@@ -150,15 +163,30 @@ export function GfaUpload() {
       await upsert("adgroups", "ad_account_id,media,adgroup_id", [...grp.values()]);
       await upsert("creatives", "ad_account_id,media,creative_id", [...cre.values()]);
 
-      // 2) 같은 날짜 기존 GFA 데이터 정리 (선택)
+      // 2) 기존 데이터 정리 (선택) — 파일 종류별로만 교체한다.
+      //    · 같은 종류 파일로 예전에 올린 그 날짜 데이터
+      //    · 이번 파일에 들어 있는 캠페인의 그 날짜 데이터 (예전 방식으로 올라간 행 정리)
+      //    → 일반 소재 파일과 ADVoost 파일을 따로 올려도 서로를 지우지 않는다.
       let removed = 0;
       if (replace) {
-        for (const part of chunks(preview.dates, 50)) {
-          const { error, count } = await supabase.from("ad_performance_daily")
-            .delete({ count: "exact" })
-            .eq("ad_account_id", accountId).eq("media", "gfa").in("stat_date", part);
-          if (error) throw new Error(error.message);
-          removed += count ?? 0;
+        const del = async (dates: string[], col: "source" | "campaign_id", values: string[]) => {
+          for (const dPart of chunks(dates, 50)) {
+            for (const vPart of chunks(values, 100)) {
+              const { error, count } = await supabase.from("ad_performance_daily")
+                .delete({ count: "exact" })
+                .eq("ad_account_id", accountId).eq("media", "gfa")
+                .in("stat_date", dPart).in(col, vPart);
+              if (error) throw new Error(error.message);
+              removed += count ?? 0;
+            }
+          }
+        };
+        for (const kind of ["creative", "advoost"] as GfaKind[]) {
+          const part = rows.filter((r) => r.kind === kind);
+          if (!part.length) continue;
+          const dates = [...new Set(part.map((r) => r.stat_date))];
+          await del(dates, "source", [GFA_SOURCE[kind]]);
+          await del(dates, "campaign_id", [...new Set(part.map((r) => r.campaign_id))]);
         }
       }
 
@@ -170,7 +198,7 @@ export function GfaUpload() {
         conv_count: r.conv_count, conv_revenue: r.conv_revenue,
         total_conv_count: r.total_conv_count, total_conv_revenue: r.total_conv_revenue,
         cart_count: r.cart_count, cart_revenue: r.cart_revenue,
-        source: "gfa_import", updated_at: now,
+        source: GFA_SOURCE[r.kind], updated_at: now,
       }));
       await upsert("ad_performance_daily", "ad_account_id,media,stat_date,campaign_id,adgroup_id,creative_id", payload);
 
@@ -264,14 +292,17 @@ export function GfaUpload() {
                 <p className="text-sm font-medium">
                   {parsing ? "파일 읽는 중…" : "여기로 파일을 끌어다 놓거나 클릭해서 선택"}
                 </p>
-                <p className="text-2xs text-ink-faint">여러 날짜 · 여러 파일을 한 번에 올려도 됩니다</p>
+                <p className="text-2xs text-ink-faint">
+                  일반 소재 리포트 · ADVoost 상품 리포트 모두 가능 — 두 파일을 한 번에 올려도, 따로 올려도 됩니다
+                </p>
               </div>
 
               <label className="mt-3 flex items-start gap-2 text-xs text-ink-muted">
                 <input type="checkbox" className="mt-0.5" checked={replace} onChange={(e) => setReplace(e.target.checked)} />
                 <span>
-                  <b className="text-ink">올리는 날짜의 기존 GFA 데이터를 먼저 지우고 새로 넣기 (권장)</b><br />
-                  같은 날짜를 다시 올릴 때 예전 행이 남지 않습니다. 한 날짜를 캠페인별로 나눠 따로따로 올릴 때만 끄세요.
+                  <b className="text-ink">같은 종류 파일로 올렸던 그 날짜 데이터를 지우고 새로 넣기 (권장)</b><br />
+                  일반 소재 파일은 일반 소재 데이터만, ADVoost 파일은 ADVoost 데이터만 교체합니다.
+                  같은 종류 파일을 캠페인별로 나눠 따로따로 올릴 때만 끄세요.
                 </span>
               </label>
             </div>
@@ -286,12 +317,14 @@ export function GfaUpload() {
                 <div><p className="text-2xs text-ink-faint">노출수 합계</p><p className="tnum font-medium">{num(preview.impressions)}</p></div>
                 <div><p className="text-2xs text-ink-faint">캠페인</p><p className="tnum font-medium">{num(preview.campaigns)}개</p></div>
                 <div><p className="text-2xs text-ink-faint">세트</p><p className="tnum font-medium">{num(preview.adgroups)}개</p></div>
-                <div><p className="text-2xs text-ink-faint">소재</p><p className="tnum font-medium">{num(preview.creatives)}개</p></div>
+                <div><p className="text-2xs text-ink-faint">소재·상품</p><p className="tnum font-medium">{num(preview.creatives)}개</p></div>
               </div>
               <ul className="border-t border-line px-4 py-2 text-2xs text-ink-muted">
                 {preview.files.map((f) => (
                   <li key={f.name} className="py-0.5">
-                    {f.name} — {f.level} 단위 · {num(f.rows)}행{f.skipped ? ` · 건너뜀 ${num(f.skipped)}` : ""}
+                    <b className="text-ink">{KIND_LABEL[f.kind]}</b> · {f.name} — {f.level} 단위 ·{" "}
+                    {num(f.rows)}행 · 광고비 {won(f.cost)}{f.skipped ? ` · 건너뜀 ${num(f.skipped)}` : ""}
+                    {f.kind === "advoost" && " · 캠페인 → ‘ADVoost 상품’ 세트 → 상품별로 들어갑니다"}
                     {f.level === "캠페인" && " · 세트/소재 구분 없이 캠페인 단위로만 보입니다"}
                   </li>
                 ))}
